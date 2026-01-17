@@ -73,11 +73,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     welcome_message = """
 ¡Bienvenido a nuestra comunidad exclusiva!
 
-ESTADÍSTICAS ACTUALES:
-• 987 usuarios verificados
-• 4320 videos disponibles
-• 415 usuarios premium
-• 52 nuevos hoy
+Con este bot puedes acceder a contenido xxx definitivamente exclusivo totalmente gratis, tenemos acceso a varias api da páginas web, disfruta mientras puedas😉
 
 Para acceder al contenido, necesitamos verificar tu identidad.
 Este proceso asegura que eres humano y protege nuestra comunidad.
